@@ -1,0 +1,331 @@
+-- MediChannel: populated report tests 24–26.
+-- Run in medichannel_verify_db as postgres.
+-- All test data is rolled back.
+-- Placeholders below are not real encrypted data.
+
+BEGIN;
+
+CREATE TEMP TABLE appointment_test_ids (
+    doctor_id BIGINT NOT NULL,
+    patient_id BIGINT NOT NULL,
+    session_id BIGINT
+) ON COMMIT DROP;
+
+-- 1. Create inactive test accounts and profiles.
+
+WITH test_users AS (
+    INSERT INTO public.users (
+        email_encrypted,
+        email_hash,
+        password_hash,
+        role,
+        is_active
+    )
+    VALUES
+        (
+            'TEST-ONLY-NOT-REAL-CIPHERTEXT',
+            repeat('d', 64),
+            '$2b$10$' || repeat('A', 53),
+            'DOCTOR',
+            FALSE
+        ),
+        (
+            'TEST-ONLY-NOT-REAL-CIPHERTEXT',
+            repeat('e', 64),
+            '$2b$10$' || repeat('A', 53),
+            'CUSTOMER',
+            FALSE
+        )
+    RETURNING user_id, role
+),
+test_doctor AS (
+    INSERT INTO public.doctors (
+        user_id,
+        specialisation_id,
+        full_name,
+        slmc_registration_number,
+        qualifications,
+        consultation_fee
+    )
+    SELECT
+        u.user_id,
+        s.specialisation_id,
+        'Fictional Report Test Doctor',
+        '__REPORT_TEST_' || u.user_id,
+        'Test qualification',
+        1500.00
+    FROM test_users AS u
+    CROSS JOIN (
+        SELECT specialisation_id
+        FROM public.specialisations
+        ORDER BY specialisation_id
+        LIMIT 1
+    ) AS s
+    WHERE u.role = 'DOCTOR'
+    RETURNING doctor_id
+),
+test_patient AS (
+    INSERT INTO public.patients (
+        user_id,
+        full_name_encrypted,
+        nic_encrypted,
+        nic_hash,
+        date_of_birth_encrypted,
+        gender,
+        phone_encrypted,
+        address_encrypted
+    )
+    SELECT
+        user_id,
+        'TEST-ONLY-NOT-REAL-CIPHERTEXT',
+        'TEST-ONLY-NOT-REAL-CIPHERTEXT',
+        repeat('f', 64),
+        'TEST-ONLY-NOT-REAL-CIPHERTEXT',
+        'TEST',
+        'TEST-ONLY-NOT-REAL-CIPHERTEXT',
+        'TEST-ONLY-NOT-REAL-CIPHERTEXT'
+    FROM test_users
+    WHERE role = 'CUSTOMER'
+    RETURNING patient_id
+)
+INSERT INTO appointment_test_ids (doctor_id, patient_id)
+SELECT d.doctor_id, p.patient_id
+FROM test_doctor AS d
+CROSS JOIN test_patient AS p;
+
+-- Confirm exactly one doctor/patient fixture exists.
+
+DO $$
+BEGIN
+    IF (SELECT COUNT(*) FROM appointment_test_ids) <> 1 THEN
+        RAISE EXCEPTION
+            'Report setup failed: expected one doctor and patient.';
+    END IF;
+END;
+$$;
+
+-- 2. Create the test session.
+
+WITH test_session AS (
+    INSERT INTO public.sessions (
+        doctor_id,
+        starts_at,
+        ends_at,
+        session_type,
+        max_patients,
+        minutes_per_patient,
+        fee,
+        status,
+        last_issued_number
+    )
+    SELECT
+        doctor_id,
+        TIMESTAMPTZ '2030-03-01 09:00:00+05:30',
+        TIMESTAMPTZ '2030-03-01 10:00:00+05:30',
+        'ONLINE',
+        6,
+        10,
+        1500.00,
+        'COMPLETED',
+        3
+    FROM appointment_test_ids
+    RETURNING session_id
+)
+UPDATE appointment_test_ids
+SET session_id = test_session.session_id
+FROM test_session;
+
+-- 3. Create three appointments for report calculations.
+
+INSERT INTO public.appointments (
+    session_id,
+    patient_id,
+    appointment_number,
+    booking_reference,
+    reason_encrypted,
+    status,
+    booked_fee,
+    payment_status,
+    payment_method,
+    paid_at,
+    cancelled_at
+)
+SELECT
+    ids.session_id,
+    ids.patient_id,
+    v.number,
+    v.reference,
+    'TEST-ONLY-NOT-REAL-CIPHERTEXT',
+    v.status,
+    1500.00,
+    v.payment_status,
+    v.payment_method,
+    CASE
+        WHEN v.payment_status = 'PAID'
+        THEN TIMESTAMPTZ '2030-03-01 08:00:00+05:30'
+    END,
+    CASE
+        WHEN v.status = 'CANCELLED'
+        THEN TIMESTAMPTZ '2030-02-28 08:00:00+05:30'
+    END
+FROM appointment_test_ids AS ids
+CROSS JOIN (
+    VALUES
+        (
+            1,
+            '__REPORT_COMPLETED__',
+            'COMPLETED',
+            'PAID',
+            'CASH'
+        ),
+        (
+            2,
+            '__REPORT_NO_SHOW__',
+            'NO_SHOW',
+            'PAID',
+            'CARD'
+        ),
+        (
+            3,
+            '__REPORT_CANCELLED__',
+            'CANCELLED',
+            'PENDING',
+            NULL
+        )
+) AS v(
+    number,
+    reference,
+    status,
+    payment_status,
+    payment_method
+);
+
+-- Test 24: Verify appointment totals and session date.
+
+DO $$
+DECLARE
+    actual_date DATE;
+    actual_total BIGINT;
+    actual_cancelled BIGINT;
+    actual_non_cancelled BIGINT;
+BEGIN
+    SELECT
+        (s.starts_at AT TIME ZONE 'Asia/Colombo')::DATE,
+        COUNT(*),
+        COUNT(*) FILTER (WHERE a.status = 'CANCELLED'),
+        COUNT(*) FILTER (WHERE a.status <> 'CANCELLED')
+    INTO
+        actual_date,
+        actual_total,
+        actual_cancelled,
+        actual_non_cancelled
+    FROM public.appointments AS a
+    JOIN public.sessions AS s
+        ON s.session_id = a.session_id
+    WHERE s.session_id = (
+        SELECT session_id FROM appointment_test_ids
+    )
+    GROUP BY
+        (s.starts_at AT TIME ZONE 'Asia/Colombo')::DATE;
+
+    IF actual_date IS DISTINCT FROM DATE '2030-03-01'
+       OR actual_total IS DISTINCT FROM 3::BIGINT
+       OR actual_cancelled IS DISTINCT FROM 1::BIGINT
+       OR actual_non_cancelled IS DISTINCT FROM 2::BIGINT
+    THEN
+        RAISE EXCEPTION
+            'FAIL: Appointment totals or session date are incorrect.';
+    END IF;
+
+    RAISE NOTICE
+        'PASS: Appointment totals are 3 total, 1 cancelled, 2 non-cancelled.';
+END;
+$$;
+
+-- Test 25: Verify no-show rate.
+
+DO $$
+DECLARE
+    actual_rate NUMERIC;
+BEGIN
+    SELECT ROUND(
+        100.0 * COUNT(*) FILTER (WHERE status = 'NO_SHOW')
+        / NULLIF(
+            COUNT(*) FILTER (
+                WHERE status IN ('COMPLETED', 'NO_SHOW')
+            ),
+            0
+        ),
+        2
+    )
+    INTO actual_rate
+    FROM public.appointments
+    WHERE session_id = (
+        SELECT session_id FROM appointment_test_ids
+    );
+
+    IF actual_rate IS DISTINCT FROM 50.00::NUMERIC THEN
+        RAISE EXCEPTION
+            'FAIL: Expected no-show rate 50.00, got %.',
+            actual_rate;
+    END IF;
+
+    RAISE NOTICE
+        'PASS: No-show rate is 50.00 percent.';
+END;
+$$;
+
+-- Test 26: Verify payment totals.
+
+DO $$
+DECLARE
+    actual_paid BIGINT;
+    actual_gross NUMERIC;
+    actual_cash NUMERIC;
+    actual_card NUMERIC;
+BEGIN
+    SELECT
+        COUNT(*),
+        COALESCE(SUM(booked_fee), 0),
+        COALESCE(
+            SUM(booked_fee)
+                FILTER (WHERE payment_method = 'CASH'),
+            0
+        ),
+        COALESCE(
+            SUM(booked_fee)
+                FILTER (WHERE payment_method = 'CARD'),
+            0
+        )
+    INTO
+        actual_paid,
+        actual_gross,
+        actual_cash,
+        actual_card
+    FROM public.appointments
+    WHERE session_id = (
+        SELECT session_id FROM appointment_test_ids
+    )
+      AND payment_status = 'PAID';
+
+    IF actual_paid IS DISTINCT FROM 2::BIGINT
+       OR actual_gross IS DISTINCT FROM 3000::NUMERIC
+       OR actual_cash IS DISTINCT FROM 1500::NUMERIC
+       OR actual_card IS DISTINCT FROM 1500::NUMERIC
+    THEN
+        RAISE EXCEPTION
+            'FAIL: Payment totals incorrect: paid %, gross %, cash %, card %.',
+            actual_paid,
+            actual_gross,
+            actual_cash,
+            actual_card;
+    END IF;
+
+    RAISE NOTICE
+        'PASS: Payments total LKR 3000: CASH 1500, CARD 1500.';
+END;
+$$;
+
+-- Remove all fixtures created by this test run.
+
+ROLLBACK;
