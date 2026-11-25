@@ -1,0 +1,15 @@
+MediChannel - Database Table Plan
+
+01. users
+02. patients
+03. specialisations
+04. doctors
+05. rooms
+06. sessions
+07. appointments
+08. consultations
+09. chat_messages
+10. notifications
+11. feedback
+12. notices
+13. audit_logs
