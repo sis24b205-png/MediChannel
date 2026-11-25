@@ -1,0 +1,228 @@
+MediChannel - Database Design
+
+1. Overview
+
+MediChannel uses PostgreSQL to store hospital channelling
+and appointment information. The database contains 13
+related tables.
+
+Primary keys identify individual records. Foreign keys
+connect related records. UNIQUE, NOT NULL and CHECK
+constraints enforce data integrity.
+
+2. Tables and Their Purposes
+
+users:
+Stores login credentials, account roles, activation status
+and failed-login tracking.
+
+patients:
+Stores patient profiles linked to CUSTOMER accounts.
+Personal fields are designed to hold encrypted values.
+
+specialisations:
+Stores medical specialisations assigned to doctors.
+
+doctors:
+Stores professional doctor profiles linked to DOCTOR
+accounts and medical specialisations.
+
+rooms:
+Stores rooms used for physical consultation sessions.
+
+sessions:
+Stores doctor schedules, session type, room, capacity,
+fees, queue counters and delays.
+
+appointments:
+Connects patients to sessions and stores appointment
+numbers, booking references, status and payment details.
+
+consultations:
+Stores consultation timing and encrypted medical notes
+for an appointment.
+
+chat_messages:
+Stores encrypted consultation messages and their senders.
+
+notifications:
+Stores user-specific in-app notifications and read times.
+
+feedback:
+Stores one rating and optional comment per appointment,
+with moderation details.
+
+notices:
+Stores hospital announcements and publication details.
+
+audit_logs:
+Stores security and administrative events without
+medical content.
+
+3. Table Relationships
+
+users -> patients:
+One user can have zero or one patient profile.
+Each patient profile belongs to exactly one user.
+
+users -> doctors:
+One user can have zero or one doctor profile.
+Each doctor profile belongs to exactly one user.
+The backend must enforce the appropriate account role
+for both patient and doctor profiles.
+
+specialisations -> doctors:
+One specialisation can have many doctors.
+Each doctor belongs to one specialisation.
+
+doctors -> sessions:
+One doctor can have many sessions.
+Each session belongs to one doctor.
+
+rooms -> sessions:
+One room can be used for many sessions at different times.
+A PHYSICAL session requires one room.
+An ONLINE session has no room.
+
+patients -> appointments:
+One patient can have many appointments.
+Each appointment belongs to one patient.
+
+sessions -> appointments:
+One session can have many appointments.
+Each appointment belongs to one session.
+A patient can have at most one active appointment
+in a session.
+
+appointments -> consultations:
+One appointment can have zero or one consultation.
+Each consultation belongs to one appointment.
+
+consultations -> chat_messages:
+One consultation can have many chat messages.
+Each message belongs to one consultation and has
+one sender linked to users.
+
+users -> notifications:
+Each notification has exactly one recipient.
+A notification may also reference a session,
+an appointment, or both.
+
+appointments -> feedback:
+One appointment can have zero or one feedback record.
+Each feedback record belongs to one appointment.
+A moderator, when present, is linked to users.
+
+users -> notices:
+Each notice references its creator and latest editor.
+
+users -> audit_logs:
+One user can be associated with many audit events.
+The actor may be NULL for an unidentified login attempt.
+
+The ERD is provided in database/medichannel_erd.png.
+
+4. Design Decisions
+
+Identity primary keys:
+BIGINT identity columns generate record identifiers.
+Gaps in identifiers are acceptable.
+
+Money:
+NUMERIC(10,2) stores fees with two decimal places.
+CHECK constraints reject negative fees and NaN.
+
+Dates and times:
+TIMESTAMPTZ stores session and event timestamps.
+The application displays times using Asia/Colombo.
+
+Session overlaps:
+GiST exclusion constraints prevent overlapping
+non-cancelled sessions for a doctor or room.
+Half-open ranges allow back-to-back sessions.
+Delay minutes are included in overlap calculations.
+
+Appointment numbers:
+UNIQUE(session_id, appointment_number) prevents
+duplicate numbers, including on cancelled records.
+The backend must lock the session row while issuing
+numbers and enforce capacity and non-reuse.
+
+Active bookings:
+A partial unique index prevents multiple active
+appointments for one patient in the same session.
+Active statuses are BOOKED, ARRIVED and IN_CONSULTATION.
+
+Fee history:
+appointments.booked_fee captures the session fee
+at booking time. Later fee changes must not alter
+this recorded amount.
+
+Encrypted fields:
+TEXT columns hold encrypted personal and medical values.
+Email and NIC have separate HMAC-SHA256 lookup columns.
+The backend must perform encryption, normalization,
+HMAC generation and validation before storage.
+Column names alone do not provide encryption.
+
+History:
+Status and activation fields support retaining records.
+Foreign keys use ON DELETE RESTRICT.
+The application role has no DELETE permission.
+
+Audit protection:
+The application role can read and append audit logs.
+It cannot update, delete or truncate them.
+A trigger also blocks those operations.
+Table owners and superusers can alter these protections.
+
+Automatic timestamps:
+BEFORE UPDATE triggers refresh updated_at on ten tables.
+
+5. Indexes
+
+Unique indexes on LOWER(TRIM(name)) and
+LOWER(TRIM(room_number)) prevent duplicate specialisation
+names and room numbers despite case or outer spaces.
+
+The active-appointment partial unique index enforces
+one active booking per patient per session.
+
+Additional indexes support:
+- Looking up appointments by patient.
+- Reading consultation messages in chronological order.
+- Listing recent notifications for a recipient.
+- Finding unread notifications.
+- Filtering audit logs by actor and time.
+
+Primary keys and UNIQUE constraints also create indexes.
+Session exclusion constraints create GiST indexes.
+
+6. Backend Integration Responsibilities
+
+The Spring Boot service layer must enforce:
+- Account roles, ownership and medical-record privacy.
+- Login lockout and staff password-change requirements.
+- AES-256-GCM encryption and HMAC lookup generation.
+- Booking cutoffs and patient cancellation rules.
+- Transactional number allocation with session-row locking.
+- Valid appointment and session status transitions.
+- Consultation and chat access restrictions.
+- Consistency between notification references.
+- Feedback ownership and manager moderation permissions.
+- Audit event creation and safe handling of user input.
+
+Database constraints provide additional protection;
+they do not replace backend authorization.
+
+7. Verification and Remaining Work
+
+The setup scripts were run against a fresh database.
+All 23 documented database tests passed.
+
+Report queries were executed with no appointment data.
+Their numerical results still require populated-data tests.
+
+Remaining work includes encrypted fictional seed data
+for every role and appointment status, backend integration,
+concurrent-booking tests and hosted-database verification.
