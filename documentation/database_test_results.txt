@@ -124,3 +124,9 @@ The remaining report queries still need populated-data checks.
     Multiple-rating averages and HIDDEN/DELETED exclusion
     were not tested.
 
+30. Today's session report: PASS
+    Today's cancelled ONLINE session was included.
+    Unissued numbers: 3; now serving: 1.
+    Non-cancelled appointments: 2; room: NULL.
+    Other-date exclusion and PHYSICAL room display
+    were not tested.

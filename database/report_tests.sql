@@ -487,4 +487,178 @@ BEGIN
 END;
 $$;
 
+-- Test 30: Verify today's session report.
+DO $$
+DECLARE
+    test_session_id BIGINT;
+    today_colombo DATE;
+    actual_rows BIGINT;
+    actual_unissued INTEGER;
+    actual_serving INTEGER;
+    actual_count BIGINT;
+    actual_status TEXT;
+    actual_room TEXT;
+BEGIN
+    SELECT session_id
+    INTO STRICT test_session_id
+    FROM appointment_test_ids;
+
+    today_colombo :=
+        (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Colombo')::DATE;
+
+    -- Move only the temporary fixture to today.
+    UPDATE public.sessions
+    SET starts_at =
+            (today_colombo + TIME '09:00')
+                AT TIME ZONE 'Asia/Colombo',
+        ends_at =
+            (today_colombo + TIME '10:00')
+                AT TIME ZONE 'Asia/Colombo',
+        status = 'CANCELLED',
+        now_serving_number = 1
+    WHERE session_id = test_session_id;
+
+    SELECT
+        COUNT(*),
+        MAX(report.unissued_numbers),
+        MAX(report.now_serving_number),
+        MAX(report.non_cancelled_appointments),
+        MAX(report.status),
+        MAX(report.room_number)
+    INTO
+        actual_rows,
+        actual_unissued,
+        actual_serving,
+        actual_count,
+        actual_status,
+        actual_room
+    FROM (
+        SELECT
+            s.session_id,
+            r.room_number,
+            s.status,
+            s.max_patients - s.last_issued_number
+                AS unissued_numbers,
+            s.now_serving_number,
+            COUNT(a.appointment_id) FILTER (
+                WHERE a.status <> 'CANCELLED'
+            ) AS non_cancelled_appointments
+        FROM public.sessions AS s
+        JOIN public.doctors AS d
+            ON d.doctor_id = s.doctor_id
+        LEFT JOIN public.rooms AS r
+            ON r.room_id = s.room_id
+        LEFT JOIN public.appointments AS a
+            ON a.session_id = s.session_id
+        WHERE
+            (s.starts_at AT TIME ZONE 'Asia/Colombo')::DATE
+            =
+            (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Colombo')::DATE
+        GROUP BY s.session_id, d.doctor_id, r.room_id
+    ) AS report
+    WHERE report.session_id = test_session_id;
+
+    IF actual_rows IS DISTINCT FROM 1::BIGINT
+       OR actual_unissued IS DISTINCT FROM 3
+       OR actual_serving IS DISTINCT FROM 1
+       OR actual_count IS DISTINCT FROM 2::BIGINT
+       OR actual_status IS DISTINCT FROM 'CANCELLED'
+       OR actual_room IS NOT NULL
+    THEN
+        RAISE EXCEPTION
+            'FAIL: Today session report returned unexpected values.';
+    END IF;
+
+    RAISE NOTICE
+        'PASS: Today report includes cancelled ONLINE session: 3 unissued, serving 1, 2 non-cancelled appointments.';
+END;
+$$;
+
+-- Test 30: Verify today's session report.
+DO $$
+DECLARE
+    test_session_id BIGINT;
+    today_colombo DATE;
+    actual_rows BIGINT;
+    actual_unissued INTEGER;
+    actual_serving INTEGER;
+    actual_count BIGINT;
+    actual_status TEXT;
+    actual_room TEXT;
+BEGIN
+    SELECT session_id
+    INTO STRICT test_session_id
+    FROM appointment_test_ids;
+
+    today_colombo :=
+        (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Colombo')::DATE;
+
+    -- Move only the temporary fixture to today.
+    UPDATE public.sessions
+    SET starts_at =
+            (today_colombo + TIME '09:00')
+                AT TIME ZONE 'Asia/Colombo',
+        ends_at =
+            (today_colombo + TIME '10:00')
+                AT TIME ZONE 'Asia/Colombo',
+        status = 'CANCELLED',
+        now_serving_number = 1
+    WHERE session_id = test_session_id;
+
+    SELECT
+        COUNT(*),
+        MAX(report.unissued_numbers),
+        MAX(report.now_serving_number),
+        MAX(report.non_cancelled_appointments),
+        MAX(report.status),
+        MAX(report.room_number)
+    INTO
+        actual_rows,
+        actual_unissued,
+        actual_serving,
+        actual_count,
+        actual_status,
+        actual_room
+    FROM (
+        SELECT
+            s.session_id,
+            r.room_number,
+            s.status,
+            s.max_patients - s.last_issued_number
+                AS unissued_numbers,
+            s.now_serving_number,
+            COUNT(a.appointment_id) FILTER (
+                WHERE a.status <> 'CANCELLED'
+            ) AS non_cancelled_appointments
+        FROM public.sessions AS s
+        JOIN public.doctors AS d
+            ON d.doctor_id = s.doctor_id
+        LEFT JOIN public.rooms AS r
+            ON r.room_id = s.room_id
+        LEFT JOIN public.appointments AS a
+            ON a.session_id = s.session_id
+        WHERE
+            (s.starts_at AT TIME ZONE 'Asia/Colombo')::DATE
+            =
+            (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Colombo')::DATE
+        GROUP BY s.session_id, d.doctor_id, r.room_id
+    ) AS report
+    WHERE report.session_id = test_session_id;
+
+    IF actual_rows IS DISTINCT FROM 1::BIGINT
+       OR actual_unissued IS DISTINCT FROM 3
+       OR actual_serving IS DISTINCT FROM 1
+       OR actual_count IS DISTINCT FROM 2::BIGINT
+       OR actual_status IS DISTINCT FROM 'CANCELLED'
+       OR actual_room IS NOT NULL
+    THEN
+        RAISE EXCEPTION
+            'FAIL: Today session report returned unexpected values.';
+    END IF;
+
+    RAISE NOTICE
+        'PASS: Today report includes cancelled ONLINE session: 3 unissued, serving 1, 2 non-cancelled appointments.';
+END;
+$$;
+
 ROLLBACK;
