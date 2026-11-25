@@ -375,3 +375,108 @@ BEGIN
     END;
 END;
 $$;
+
+-- Test 13: Reject PAID appointments without a payment method.
+-- No patient or medical data is stored by this test.
+
+DO $$
+DECLARE
+    failed_constraint TEXT;
+BEGIN
+    BEGIN
+        INSERT INTO public.appointments (
+            session_id, patient_id,
+            appointment_number, booking_reference,
+            reason_encrypted, payment_status,
+            payment_method, booked_fee, paid_at
+        )
+        VALUES (
+            -1, -1,
+            1, '__TEST_PAID_WITHOUT_METHOD__',
+            'temporary-test-placeholder', 'PAID',
+            NULL, 1500.00, CURRENT_TIMESTAMP
+        );
+
+        RAISE EXCEPTION
+            'FAIL: PAID appointment without a method was accepted.';
+
+    EXCEPTION
+        WHEN check_violation THEN
+            GET STACKED DIAGNOSTICS
+                failed_constraint = CONSTRAINT_NAME;
+
+            IF failed_constraint <>
+                'chk_appointments_payment_details'
+            THEN
+                RAISE;
+            END IF;
+
+            RAISE NOTICE
+                'PASS: PAID appointment without a method was rejected.';
+    END;
+END;
+$$;
+
+-- Test 14: Reject appointment number zero.
+
+DO $$
+DECLARE
+    failed_constraint TEXT;
+BEGIN
+    BEGIN
+        INSERT INTO public.appointments (
+            session_id, patient_id,
+            appointment_number, booking_reference,
+            reason_encrypted, booked_fee
+        )
+        VALUES (
+            -1, -1,
+            0, '__TEST_ZERO_NUMBER__',
+            'temporary-test-placeholder', 1500.00
+        );
+
+        RAISE EXCEPTION
+            'FAIL: Appointment number zero was accepted.';
+
+    EXCEPTION
+        WHEN check_violation THEN
+            GET STACKED DIAGNOSTICS
+                failed_constraint = CONSTRAINT_NAME;
+
+            IF failed_constraint <> 'chk_appointments_number' THEN
+                RAISE;
+            END IF;
+
+            RAISE NOTICE
+                'PASS: Appointment number zero was rejected.';
+    END;
+END;
+$$;
+
+-- Test 15: Reject a feedback rating above 5.
+
+DO $$
+DECLARE
+    failed_constraint TEXT;
+BEGIN
+    BEGIN
+        INSERT INTO public.feedback (appointment_id, rating)
+        VALUES (-1, 6);
+
+        RAISE EXCEPTION
+            'FAIL: Feedback rating above 5 was accepted.';
+
+    EXCEPTION
+        WHEN check_violation THEN
+            GET STACKED DIAGNOSTICS
+                failed_constraint = CONSTRAINT_NAME;
+
+            IF failed_constraint <> 'chk_feedback_rating' THEN
+                RAISE;
+            END IF;
+
+            RAISE NOTICE
+                'PASS: Feedback rating above 5 was rejected.';
+    END;
+END;
+$$;
