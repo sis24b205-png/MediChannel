@@ -116,3 +116,11 @@ The remaining report queries still need populated-data checks.
 28. Doctor's non-cancelled appointment count: PASS
     Expected: 2; actual: 2.
     Ranking across multiple doctors was not tested.
+
+29. Approved feedback rating: PASS
+    One approved rating produced an average of 4.00.
+    After changing it to PENDING, approved count was 0
+    and average was NULL.
+    Multiple-rating averages and HIDDEN/DELETED exclusion
+    were not tested.
+

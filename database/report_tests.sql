@@ -388,4 +388,103 @@ BEGIN
 END;
 $$;
 
+-- Test 29: Verify approved feedback rating and pending exclusion.
+DO $$
+DECLARE
+    test_manager_id BIGINT;
+    test_feedback_id BIGINT;
+    actual_count BIGINT;
+    actual_average NUMERIC;
+BEGIN
+    -- Create an inactive test moderator.
+    INSERT INTO public.users (
+        email_encrypted,
+        email_hash,
+        password_hash,
+        role,
+        is_active
+    )
+    VALUES (
+        'TEST-ONLY-NOT-REAL-CIPHERTEXT',
+        repeat('a', 64),
+        '$2b$10$' || repeat('A', 53),
+        'MANAGER',
+        FALSE
+    )
+    RETURNING user_id INTO test_manager_id;
+
+    -- Add approved feedback for the completed test appointment.
+    INSERT INTO public.feedback (
+        appointment_id,
+        rating,
+        comment,
+        moderation_status,
+        moderated_by_user_id,
+        moderated_at
+    )
+    SELECT
+        a.appointment_id,
+        4,
+        'Fictional report-test feedback',
+        'APPROVED',
+        test_manager_id,
+        CURRENT_TIMESTAMP
+    FROM public.appointments AS a
+    WHERE a.session_id = (
+        SELECT session_id FROM appointment_test_ids
+    )
+      AND a.status = 'COMPLETED'
+    RETURNING feedback_id INTO STRICT test_feedback_id;
+
+    SELECT COUNT(f.feedback_id), ROUND(AVG(f.rating), 2)
+    INTO actual_count, actual_average
+    FROM public.feedback AS f
+    JOIN public.appointments AS a
+        ON a.appointment_id = f.appointment_id
+    JOIN public.sessions AS s
+        ON s.session_id = a.session_id
+    WHERE s.doctor_id = (
+        SELECT doctor_id FROM appointment_test_ids
+    )
+      AND f.moderation_status = 'APPROVED';
+
+    IF actual_count IS DISTINCT FROM 1::BIGINT
+       OR actual_average IS DISTINCT FROM 4.00::NUMERIC
+    THEN
+        RAISE EXCEPTION
+            'FAIL: Expected 1 approved rating averaging 4.00; got %, %.',
+            actual_count, actual_average;
+    END IF;
+
+    -- Change the same fixture to pending.
+    UPDATE public.feedback
+    SET moderation_status = 'PENDING',
+        moderated_by_user_id = NULL,
+        moderated_at = NULL
+    WHERE feedback_id = test_feedback_id;
+
+    SELECT COUNT(f.feedback_id), ROUND(AVG(f.rating), 2)
+    INTO actual_count, actual_average
+    FROM public.feedback AS f
+    JOIN public.appointments AS a
+        ON a.appointment_id = f.appointment_id
+    JOIN public.sessions AS s
+        ON s.session_id = a.session_id
+    WHERE s.doctor_id = (
+        SELECT doctor_id FROM appointment_test_ids
+    )
+      AND f.moderation_status = 'APPROVED';
+
+    IF actual_count IS DISTINCT FROM 0::BIGINT
+       OR actual_average IS NOT NULL
+    THEN
+        RAISE EXCEPTION
+            'FAIL: Pending feedback was included in approved ratings.';
+    END IF;
+
+    RAISE NOTICE
+        'PASS: Approved feedback average is 4.00; pending feedback is excluded.';
+END;
+$$;
+
 ROLLBACK;
