@@ -90,3 +90,21 @@ Limitations:
 - Session and appointment fixtures use temporary placeholders.
 - Transactional fixture data was rolled back after testing.
 - Report calculations with populated data remain to be tested.
+
+Additional populated report checks
+Database: medichannel_verify_db
+Script: database/report_tests.sql
+
+24. Appointment totals: PASS
+    Total: 3; cancelled: 1; non-cancelled: 2.
+
+25. No-show rate: PASS
+    1 NO_SHOW / (1 COMPLETED + 1 NO_SHOW) = 50.00%.
+
+26. Payment totals: PASS
+    2 paid appointments.
+    Gross: LKR 3000; CASH: LKR 1500; CARD: LKR 1500.
+
+All temporary test fixtures were rolled back.
+These checks validate calculations using controlled fixtures.
+The remaining report queries still need populated-data checks.
