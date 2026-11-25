@@ -1,0 +1,92 @@
+MediChannel - Database Test Results
+
+Test date: 25 November 2026
+Database: medichannel_verify_db
+PostgreSQL version: 18.6
+Execution account: postgres
+Tool: pgAdmin 4
+
+Format: ID | Test | Expected result | Actual result
+
+01 | Duplicate specialisation name with different case/spaces
+   | Reject using unique index | PASS: Rejected
+
+02 | Duplicate room number with different case/spaces
+   | Reject using unique index | PASS: Rejected
+
+03 | Blank room number
+   | Reject using chk_rooms_number | PASS: Rejected
+
+04 | Blank specialisation name
+   | Reject using chk_specialisations_name | PASS: Rejected
+
+05 | Consultation referencing a missing appointment
+   | Reject using foreign key | PASS: Rejected
+
+06 | Audit log UPDATE, even with no matching rows
+   | Block using protection trigger | PASS: Blocked
+
+07 | Audit log DELETE, even with no matching rows
+   | Block using protection trigger | PASS: Blocked
+
+08 | Update a room with an old updated_at value
+   | Refresh updated_at automatically | PASS: Refreshed
+
+09 | Session capacity above 60
+   | Reject using chk_sessions_capacity | PASS: Rejected
+
+10 | ONLINE session assigned a room
+   | Reject using chk_sessions_room | PASS: Rejected
+
+11 | PHYSICAL session without a room
+   | Reject using chk_sessions_room | PASS: Rejected
+
+12 | Session ending before its start
+   | Reject using chk_sessions_times | PASS: Rejected
+
+13 | PAID appointment without payment method
+   | Reject using payment details constraint | PASS: Rejected
+
+14 | Appointment number zero
+   | Reject using chk_appointments_number | PASS: Rejected
+
+15 | Feedback rating above 5
+   | Reject using chk_feedback_rating | PASS: Rejected
+
+16 | Overlapping sessions for the same doctor
+   | Reject using doctor exclusion constraint | PASS: Rejected
+
+17 | Back-to-back sessions for the same doctor
+   | Accept without overlap | PASS: Accepted
+
+18 | Session delay causing doctor overlap
+   | Reject using doctor exclusion constraint | PASS: Rejected
+
+19 | Cancelled session overlapping another session
+   | Accept because cancelled sessions are excluded
+   | PASS: Accepted
+
+20 | Different doctors using one room at overlapping times
+   | Reject using room exclusion constraint | PASS: Rejected
+
+21 | Different doctors using one room back-to-back
+   | Accept without overlap | PASS: Accepted
+
+22 | Duplicate appointment number in the same session
+   | Reject using uq_appointments_session_number
+   | PASS: Rejected
+
+23 | Second active booking for the same patient/session
+   | Reject using uq_appointments_active_patient
+   | PASS: Rejected
+
+Summary:
+23 tests executed; 23 passed.
+
+Limitations:
+- These tests verify database behaviour only.
+- They do not verify backend permissions, encryption,
+  booking cutoffs, status transitions or concurrent booking.
+- Session and appointment fixtures use temporary placeholders.
+- Transactional fixture data was rolled back after testing.
+- Report calculations with populated data remain to be tested.
