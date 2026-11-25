@@ -13,3 +13,442 @@ MediChannel - Database Table Plan
 11. feedback
 12. notices
 13. audit_logs
+
+01. users
+Purpose: Login and account details for all four roles.
+
+Columns:
+- user_id: BIGINT, PRIMARY KEY, generated identity
+- email_encrypted: TEXT, NOT NULL
+- email_hash: VARCHAR(64), UNIQUE, NOT NULL
+- password_hash: VARCHAR(255), NOT NULL
+- role: VARCHAR(20), NOT NULL
+- is_active: BOOLEAN, NOT NULL, default TRUE
+- failed_login_attempts: INTEGER, NOT NULL, default 0
+- locked_until: TIMESTAMPTZ, nullable
+- must_change_password: BOOLEAN, NOT NULL, default FALSE
+- created_at: TIMESTAMPTZ, NOT NULL, default CURRENT_TIMESTAMP
+- updated_at: TIMESTAMPTZ, NOT NULL, default CURRENT_TIMESTAMP
+
+Rules:
+- role: CUSTOMER, DOCTOR, MANAGER or ADMIN only.
+- failed_login_attempts must be 0 or greater.
+- Public registration creates CUSTOMER accounts only.
+- Five failed logins lock the account for 15 minutes.
+- Store email encrypted with AES-256-GCM.
+- email_hash stores the HMAC-SHA256 of normalized email.
+- Store passwords as bcrypt hashes only.
+- Keep encryption and HMAC keys outside the database.
+
+02. patients
+Purpose: Personal details of patients.
+
+Columns:
+- patient_id: BIGINT, PRIMARY KEY, generated identity
+- user_id: BIGINT, UNIQUE, NOT NULL, FOREIGN KEY -> users.user_id
+- full_name_encrypted: TEXT, NOT NULL
+- nic_encrypted: TEXT, NOT NULL
+- nic_hash: VARCHAR(64), UNIQUE, NOT NULL
+- date_of_birth_encrypted: TEXT, NOT NULL
+- gender: VARCHAR(30), NOT NULL
+- phone_encrypted: TEXT, NOT NULL
+- address_encrypted: TEXT, NOT NULL
+- created_at: TIMESTAMPTZ, NOT NULL, default CURRENT_TIMESTAMP
+- updated_at: TIMESTAMPTZ, NOT NULL, default CURRENT_TIMESTAMP
+
+Rules:
+- Each patient belongs to one CUSTOMER account.
+- One user account can have at most one patient profile.
+- Encrypt personal fields with AES-256-GCM.
+- nic_hash stores the HMAC-SHA256 of normalized NIC.
+- Validate NIC before encryption: 9 digits + V/X or 12 digits.
+- Validate phone before encryption: 07 followed by 8 digits.
+- Date of birth cannot be in the future.
+- Keep patient records when the account is deactivated.
+
+Relationship:
+users 1 ---- 0..1 patients
+
+03. specialisations
+Purpose: Medical specialisations of doctors.
+
+Columns:
+- specialisation_id: BIGINT, PRIMARY KEY, generated identity
+- name: VARCHAR(100), NOT NULL
+- description: TEXT, nullable
+- is_active: BOOLEAN, NOT NULL, default TRUE
+- created_at: TIMESTAMPTZ, NOT NULL, default CURRENT_TIMESTAMP
+- updated_at: TIMESTAMPTZ, NOT NULL, default CURRENT_TIMESTAMP
+
+Rules:
+- Name must not be blank.
+- Names must be unique, ignoring letter case and outer spaces.
+- Enforce name uniqueness with a unique index on LOWER(TRIM(name)).
+- Deactivate specialisations with history instead of deleting them.
+
+Relationship:
+One specialisation can have many doctors.
+Each doctor belongs to one specialisation.
+
+04. doctors
+Purpose: Professional profiles of doctors.
+
+Columns:
+- doctor_id: BIGINT, PRIMARY KEY, generated identity
+- user_id: BIGINT, UNIQUE, NOT NULL, FOREIGN KEY -> users.user_id
+- specialisation_id: BIGINT, NOT NULL,
+  FOREIGN KEY -> specialisations.specialisation_id
+- full_name: VARCHAR(150), NOT NULL
+- slmc_registration_number: VARCHAR(50), UNIQUE, NOT NULL
+- qualifications: TEXT, NOT NULL
+- consultation_fee: NUMERIC(10,2), NOT NULL
+- bio: TEXT, nullable
+- is_active: BOOLEAN, NOT NULL, default TRUE
+- created_at: TIMESTAMPTZ, NOT NULL, default CURRENT_TIMESTAMP
+- updated_at: TIMESTAMPTZ, NOT NULL, default CURRENT_TIMESTAMP
+
+Rules:
+- Each doctor profile belongs to one DOCTOR account.
+- One user account can have at most one doctor profile.
+- Full name, SLMC number and qualifications must not be blank.
+- Normalize SLMC numbers before storing them.
+- Consultation fee must be 0 or greater, in LKR.
+- Deactivate doctors with history instead of deleting them.
+- Session fee is stored separately to preserve the agreed fee.
+
+Relationships:
+users 1 ---- 0..1 doctors
+specialisations 1 ---- many doctors
+
+05. rooms
+Purpose: Hospital rooms used for physical sessions.
+
+Columns:
+- room_id: BIGINT, PRIMARY KEY, generated identity
+- room_number: VARCHAR(30), NOT NULL
+- description: TEXT, nullable
+- is_active: BOOLEAN, NOT NULL, default TRUE
+- created_at: TIMESTAMPTZ, NOT NULL, default CURRENT_TIMESTAMP
+- updated_at: TIMESTAMPTZ, NOT NULL, default CURRENT_TIMESTAMP
+
+Rules:
+- Room number must not be blank.
+- Room numbers must be unique, ignoring case and outer spaces.
+- Enforce uniqueness with an index on LOWER(TRIM(room_number)).
+- A room cannot have overlapping non-cancelled sessions.
+- Deactivate rooms with history instead of deleting them.
+
+Relationship:
+One room can have many sessions at different times.
+Each physical session requires one room.
+Online sessions do not use a room.
+
+06. sessions
+Purpose: Physical and online consultation sessions.
+
+Columns:
+- session_id: BIGINT, PRIMARY KEY, generated identity
+- doctor_id: BIGINT, NOT NULL, FOREIGN KEY -> doctors.doctor_id
+- room_id: BIGINT, nullable, FOREIGN KEY -> rooms.room_id
+- starts_at: TIMESTAMPTZ, NOT NULL
+- ends_at: TIMESTAMPTZ, NOT NULL
+- session_type: VARCHAR(10), NOT NULL
+- max_patients: INTEGER, NOT NULL
+- minutes_per_patient: INTEGER, NOT NULL
+- fee: NUMERIC(10,2), NOT NULL
+- status: VARCHAR(20), NOT NULL, default SCHEDULED
+- delay_minutes: INTEGER, NOT NULL, default 0
+- last_issued_number: INTEGER, NOT NULL, default 0
+- now_serving_number: INTEGER, nullable
+- created_at: TIMESTAMPTZ, NOT NULL, default CURRENT_TIMESTAMP
+- updated_at: TIMESTAMPTZ, NOT NULL, default CURRENT_TIMESTAMP
+
+Rules:
+- session_type: PHYSICAL or ONLINE.
+- status: SCHEDULED, OPEN, IN_PROGRESS, COMPLETED or CANCELLED.
+- ends_at must be after starts_at.
+- max_patients must be between 1 and 60.
+- minutes_per_patient must be between 5 and 30.
+- fee and delay_minutes must be 0 or greater.
+- PHYSICAL requires a room; ONLINE requires room_id to be NULL.
+- last_issued_number must be between 0 and max_patients.
+- now_serving_number is NULL before calling a patient;
+  otherwise it must identify an appointment in this session.
+- Doctor and room schedules must not overlap,
+  excluding cancelled sessions.
+- Check overlaps using the effective time range:
+  starts_at + delay through ends_at + delay.
+- Use half-open time ranges: [start, end).
+- Enforce overlaps safely with PostgreSQL exclusion constraints.
+- Display dates and times using Asia/Colombo.
+- Lock the session row during booking before issuing a number.
+- Issued numbers are never reused, including after cancellation.
+- Keep sessions with history instead of deleting them.
+
+Relationships:
+doctors 1 ---- many sessions
+rooms 1 ---- many physical sessions
+
+07. appointments
+Purpose: Patient bookings for physical and online sessions.
+
+Columns:
+- appointment_id: BIGINT, PRIMARY KEY, generated identity
+- session_id: BIGINT, NOT NULL, FOREIGN KEY -> sessions.session_id
+- patient_id: BIGINT, NOT NULL, FOREIGN KEY -> patients.patient_id
+- appointment_number: INTEGER, NOT NULL
+- booking_reference: VARCHAR(40), UNIQUE, NOT NULL
+- reason_encrypted: TEXT, NOT NULL
+- status: VARCHAR(20), NOT NULL, default BOOKED
+- payment_status: VARCHAR(10), NOT NULL, default PENDING
+- payment_method: VARCHAR(10), nullable
+- booked_fee: NUMERIC(10,2), NOT NULL
+- paid_at: TIMESTAMPTZ, nullable
+- arrived_at: TIMESTAMPTZ, nullable
+- cancelled_at: TIMESTAMPTZ, nullable
+- created_at: TIMESTAMPTZ, NOT NULL, default CURRENT_TIMESTAMP
+- updated_at: TIMESTAMPTZ, NOT NULL, default CURRENT_TIMESTAMP
+
+Rules:
+- UNIQUE(session_id, appointment_number).
+- appointment_number must be greater than 0.
+- Never reuse an issued appointment number.
+- status: BOOKED, ARRIVED, IN_CONSULTATION,
+  COMPLETED, NO_SHOW or CANCELLED.
+- Only one active booking per patient per session.
+- Enforce this with a unique index on (session_id, patient_id)
+  WHERE status IN ('BOOKED', 'ARRIVED', 'IN_CONSULTATION').
+- payment_status: PENDING or PAID.
+- payment_method: CASH or CARD, or NULL when unpaid.
+- PAID requires payment_method and paid_at.
+- PENDING requires payment_method and paid_at to be NULL.
+- booked_fee must be 0 or greater, in LKR.
+- Copy the session fee into booked_fee when booking.
+- Encrypt the reason with AES-256-GCM.
+- Booking closes 1 hour before PHYSICAL sessions
+  and 30 minutes before ONLINE sessions.
+- Patient cancellation requires an unpaid appointment
+  and must occur at least 3 hours before the session.
+- Physical flow: BOOKED -> ARRIVED -> IN_CONSULTATION
+  -> COMPLETED.
+- Online flow: BOOKED -> IN_CONSULTATION -> COMPLETED.
+- Mark unseen patients NO_SHOW.
+- Session cancellation also cancels its appointments.
+- Keep cancelled appointments; never delete them.
+- Estimated time is calculated from session start,
+  appointment number, minutes per patient and session delay.
+- Enforce booking limits and status transitions in the backend
+  within database transactions.
+
+Relationships:
+sessions 1 ---- many appointments
+patients 1 ---- many appointments
+
+08. consultations
+Purpose: Consultation records for physical and online appointments.
+
+Columns:
+- consultation_id: BIGINT, PRIMARY KEY, generated identity
+- appointment_id: BIGINT, UNIQUE, NOT NULL,
+  FOREIGN KEY -> appointments.appointment_id
+- diagnosis_encrypted: TEXT, nullable
+- advice_encrypted: TEXT, nullable
+- prescription_encrypted: TEXT, nullable
+- started_at: TIMESTAMPTZ, NOT NULL, default CURRENT_TIMESTAMP
+- ended_at: TIMESTAMPTZ, nullable
+- created_at: TIMESTAMPTZ, NOT NULL, default CURRENT_TIMESTAMP
+- updated_at: TIMESTAMPTZ, NOT NULL, default CURRENT_TIMESTAMP
+
+Rules:
+- Each appointment can have at most one consultation.
+- Encrypt diagnosis, advice and prescription with AES-256-GCM.
+- ended_at must be NULL or at/after started_at.
+- Only the treating doctor can start and end the consultation
+  and write its medical notes.
+- Only the patient and treating doctor can read medical data.
+- ADMIN and MANAGER cannot read medical data.
+- An online room opens only when the doctor starts
+  that appointment.
+- After the consultation ends, its chat becomes read-only.
+- Audit every opening of the consultation record;
+  never include medical content in the audit log.
+- Keep consultation records; never delete records with history.
+- Enforce access and appointment-state checks in the backend,
+  including WebSocket subscriptions and messages.
+
+Relationship:
+appointments 1 ---- 0..1 consultations
+
+09. chat_messages
+Purpose: Encrypted messages in online consultations.
+
+Columns:
+- message_id: BIGINT, PRIMARY KEY, generated identity
+- consultation_id: BIGINT, NOT NULL,
+  FOREIGN KEY -> consultations.consultation_id
+- sender_user_id: BIGINT, NOT NULL,
+  FOREIGN KEY -> users.user_id
+- message_encrypted: TEXT, NOT NULL
+- sent_at: TIMESTAMPTZ, NOT NULL, default CURRENT_TIMESTAMP
+
+Rules:
+- Encrypt each message with AES-256-GCM using a fresh random IV.
+- Validate message text before encryption:
+  not blank and at most 1000 characters.
+- Only the appointment's patient and treating doctor
+  can send or read messages.
+- Messages are allowed only for ONLINE consultations.
+- Accept messages only while the consultation is open.
+- After the consultation ends, chat becomes read-only.
+- Authenticate and authorise every WebSocket subscription
+  and message in the backend.
+- Derive the sender from the authenticated account;
+  never trust a sender ID supplied by the client.
+- Do not store typing indicators or connection status here.
+- Never include message content in application or audit logs.
+- Keep messages as part of the consultation history.
+
+Relationships:
+consultations 1 ---- many chat_messages
+users 1 ---- many chat_messages
+
+10. notifications
+Purpose: In-app notifications for individual users.
+
+Columns:
+- notification_id: BIGINT, PRIMARY KEY, generated identity
+- recipient_user_id: BIGINT, NOT NULL,
+  FOREIGN KEY -> users.user_id
+- session_id: BIGINT, nullable,
+  FOREIGN KEY -> sessions.session_id
+- appointment_id: BIGINT, nullable,
+  FOREIGN KEY -> appointments.appointment_id
+- notification_type: VARCHAR(30), NOT NULL
+- message: TEXT, NOT NULL
+- read_at: TIMESTAMPTZ, nullable
+- created_at: TIMESTAMPTZ, NOT NULL, default CURRENT_TIMESTAMP
+
+Rules:
+- notification_type: THREE_AWAY, CALLED, SESSION_DELAYED,
+  SESSION_CANCELLED or CONSULTATION_STARTED.
+- Message must not be blank.
+- Use generic messages without names, medical details
+  or other sensitive personal data.
+- Only the recipient can read or mark a notification as read.
+- read_at is NULL until the notification is read.
+- read_at must be NULL or at/after created_at.
+- If both session_id and appointment_id are supplied,
+  the appointment must belong to that session.
+- Save notifications so users can see them after reconnecting.
+- Deliver live notifications only to the intended recipient.
+- Enforce ownership and related-record checks in the backend.
+
+Relationships:
+users 1 ---- many notifications
+sessions 1 ---- many notifications
+appointments 1 ---- many notifications
+
+11. feedback
+Purpose: Patient ratings and comments after completed appointments.
+
+Columns:
+- feedback_id: BIGINT, PRIMARY KEY, generated identity
+- appointment_id: BIGINT, UNIQUE, NOT NULL,
+  FOREIGN KEY -> appointments.appointment_id
+- rating: SMALLINT, NOT NULL
+- comment: TEXT, nullable
+- moderation_status: VARCHAR(10), NOT NULL, default PENDING
+- moderated_by_user_id: BIGINT, nullable,
+  FOREIGN KEY -> users.user_id
+- moderated_at: TIMESTAMPTZ, nullable
+- created_at: TIMESTAMPTZ, NOT NULL, default CURRENT_TIMESTAMP
+- updated_at: TIMESTAMPTZ, NOT NULL, default CURRENT_TIMESTAMP
+
+Rules:
+- rating must be between 1 and 5.
+- Each appointment can receive at most one feedback.
+- Only the patient who owns a COMPLETED appointment
+  can submit its feedback.
+- moderation_status: PENDING, APPROVED, HIDDEN or DELETED.
+- Only MANAGER accounts can moderate feedback.
+- Public pages show only APPROVED feedback.
+- Record the moderator and time when moderation occurs.
+- Delete feedback by setting status to DELETED,
+  preserving the record.
+- Do not include medical information in feedback.
+- Enforce ownership, appointment status and moderation
+  permissions in the backend.
+
+Relationship:
+appointments 1 ---- 0..1 feedback
+
+12. notices
+Purpose: Public hospital announcements.
+
+Columns:
+- notice_id: BIGINT, PRIMARY KEY, generated identity
+- title: VARCHAR(200), NOT NULL
+- content: TEXT, NOT NULL
+- status: VARCHAR(10), NOT NULL, default DRAFT
+- published_at: TIMESTAMPTZ, nullable
+- expires_at: TIMESTAMPTZ, nullable
+- created_by_user_id: BIGINT, NOT NULL,
+  FOREIGN KEY -> users.user_id
+- updated_by_user_id: BIGINT, NOT NULL,
+  FOREIGN KEY -> users.user_id
+- created_at: TIMESTAMPTZ, NOT NULL, default CURRENT_TIMESTAMP
+- updated_at: TIMESTAMPTZ, NOT NULL, default CURRENT_TIMESTAMP
+
+Rules:
+- Title and content must not be blank.
+- status: DRAFT, PUBLISHED or ARCHIVED.
+- PUBLISHED requires published_at.
+- expires_at must be NULL or after published_at.
+- Setting expires_at requires published_at.
+- Public pages show only PUBLISHED notices whose
+  published_at has arrived and expires_at has not passed.
+- Only MANAGER accounts can manage notices.
+- Do not include personal or medical information.
+- Archive notices with history instead of deleting them.
+- Enforce publishing and permission rules in the backend.
+
+Relationship:
+users 1 ---- many notices
+(via created_by_user_id and updated_by_user_id)
+
+13. audit_logs
+Purpose: Append-only history of security and account actions.
+
+Columns:
+- audit_log_id: BIGINT, PRIMARY KEY, generated identity
+- actor_user_id: BIGINT, nullable,
+  FOREIGN KEY -> users.user_id
+- action: VARCHAR(50), NOT NULL
+- target_type: VARCHAR(30), nullable
+- target_id: BIGINT, nullable
+- outcome: VARCHAR(10), NOT NULL
+- ip_address: INET, NOT NULL
+- occurred_at: TIMESTAMPTZ, NOT NULL, default CURRENT_TIMESTAMP
+
+Rules:
+- Record login successes and failures, account changes,
+  session cancellations and consultation-record openings.
+- actor_user_id may be NULL for an unidentified login attempt.
+- action must not be blank.
+- outcome: SUCCESS or FAILURE.
+- target_type and target_id identify the affected record;
+  they are both NULL or both supplied.
+- Never store names, emails, NICs, medical content,
+  passwords, tokens or encryption keys.
+- IP address is stored only as required for auditing.
+- Audit records cannot be edited or deleted.
+- The application database role receives SELECT and INSERT
+  permissions only on audit_logs.
+- The application role must not own this table.
+- Only ADMIN accounts can view audit logs through the API.
+- Derive actor, action and time from trusted server context.
+- Trust forwarded IP headers only from configured proxies.
+
+Relationship:
+users 1 ---- many audit_logs
+(actor_user_id is optional)
