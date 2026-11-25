@@ -328,4 +328,64 @@ $$;
 
 -- Remove all fixtures created by this test run.
 
+-- Test 27: Verify appointment totals by session type.
+DO $$
+DECLARE
+    actual_online BIGINT;
+    actual_physical BIGINT;
+BEGIN
+    SELECT
+        COUNT(a.appointment_id)
+            FILTER (WHERE s.session_type = 'ONLINE'),
+        COUNT(a.appointment_id)
+            FILTER (WHERE s.session_type = 'PHYSICAL')
+    INTO actual_online, actual_physical
+    FROM public.sessions AS s
+    JOIN public.appointments AS a
+        ON a.session_id = s.session_id
+    WHERE s.session_id = (
+        SELECT session_id FROM appointment_test_ids
+    );
+
+    IF actual_online IS DISTINCT FROM 3::BIGINT
+       OR actual_physical IS DISTINCT FROM 0::BIGINT
+    THEN
+        RAISE EXCEPTION
+            'FAIL: Expected ONLINE 3, PHYSICAL 0; got ONLINE %, PHYSICAL %.',
+            actual_online, actual_physical;
+    END IF;
+
+    RAISE NOTICE
+        'PASS: Session-type totals are ONLINE 3, PHYSICAL 0.';
+END;
+$$;
+
+-- Test 28: Verify the doctor's non-cancelled appointment count.
+DO $$
+DECLARE
+    actual_count BIGINT;
+BEGIN
+    SELECT COUNT(a.appointment_id)
+    INTO actual_count
+    FROM public.doctors AS d
+    JOIN public.sessions AS s
+        ON s.doctor_id = d.doctor_id
+    JOIN public.appointments AS a
+        ON a.session_id = s.session_id
+    WHERE d.doctor_id = (
+        SELECT doctor_id FROM appointment_test_ids
+    )
+      AND a.status <> 'CANCELLED';
+
+    IF actual_count IS DISTINCT FROM 2::BIGINT THEN
+        RAISE EXCEPTION
+            'FAIL: Expected 2 non-cancelled appointments, got %.',
+            actual_count;
+    END IF;
+
+    RAISE NOTICE
+        'PASS: Doctor has 2 non-cancelled appointments.';
+END;
+$$;
+
 ROLLBACK;
