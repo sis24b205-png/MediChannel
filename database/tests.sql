@@ -217,3 +217,161 @@ BEGIN
     END;
 END;
 $$;
+
+-- Test 09: Reject session capacity above 60.
+-- CHECK constraints are checked before the foreign key.
+
+DO $$
+DECLARE
+    failed_constraint TEXT;
+BEGIN
+    BEGIN
+        INSERT INTO public.sessions (
+            doctor_id,
+            starts_at,
+            ends_at,
+            session_type,
+            max_patients,
+            minutes_per_patient,
+            fee
+        )
+        VALUES (
+            -1,
+            '2030-01-01 09:00:00+05:30',
+            '2030-01-01 12:00:00+05:30',
+            'ONLINE',
+            61,
+            10,
+            1500.00
+        );
+
+        RAISE EXCEPTION
+            'FAIL: Session capacity above 60 was accepted.';
+
+    EXCEPTION
+        WHEN check_violation THEN
+            GET STACKED DIAGNOSTICS
+                failed_constraint = CONSTRAINT_NAME;
+
+            IF failed_constraint <> 'chk_sessions_capacity' THEN
+                RAISE;
+            END IF;
+
+            RAISE NOTICE
+                'PASS: Session capacity above 60 was rejected.';
+    END;
+END;
+$$;
+
+-- Test 10: Reject a room assigned to an ONLINE session.
+
+DO $$
+DECLARE
+    failed_constraint TEXT;
+BEGIN
+    BEGIN
+        INSERT INTO public.sessions (
+            doctor_id, room_id,
+            starts_at, ends_at,
+            session_type, max_patients,
+            minutes_per_patient, fee
+        )
+        VALUES (
+            -1, -1,
+            '2030-01-01 09:00:00+05:30',
+            '2030-01-01 12:00:00+05:30',
+            'ONLINE', 10, 10, 1500.00
+        );
+
+        RAISE EXCEPTION
+            'FAIL: ONLINE session accepted a room.';
+
+    EXCEPTION
+        WHEN check_violation THEN
+            GET STACKED DIAGNOSTICS
+                failed_constraint = CONSTRAINT_NAME;
+
+            IF failed_constraint <> 'chk_sessions_room' THEN
+                RAISE;
+            END IF;
+
+            RAISE NOTICE
+                'PASS: ONLINE session with a room was rejected.';
+    END;
+END;
+$$;
+
+-- Test 11: Reject a PHYSICAL session without a room.
+
+DO $$
+DECLARE
+    failed_constraint TEXT;
+BEGIN
+    BEGIN
+        INSERT INTO public.sessions (
+            doctor_id, room_id,
+            starts_at, ends_at,
+            session_type, max_patients,
+            minutes_per_patient, fee
+        )
+        VALUES (
+            -1, NULL,
+            '2030-01-01 09:00:00+05:30',
+            '2030-01-01 12:00:00+05:30',
+            'PHYSICAL', 10, 10, 1500.00
+        );
+
+        RAISE EXCEPTION
+            'FAIL: PHYSICAL session without a room was accepted.';
+
+    EXCEPTION
+        WHEN check_violation THEN
+            GET STACKED DIAGNOSTICS
+                failed_constraint = CONSTRAINT_NAME;
+
+            IF failed_constraint <> 'chk_sessions_room' THEN
+                RAISE;
+            END IF;
+
+            RAISE NOTICE
+                'PASS: PHYSICAL session without a room was rejected.';
+    END;
+END;
+$$;
+
+-- Test 12: Reject a session ending before it starts.
+
+DO $$
+DECLARE
+    failed_constraint TEXT;
+BEGIN
+    BEGIN
+        INSERT INTO public.sessions (
+            doctor_id, starts_at, ends_at,
+            session_type, max_patients,
+            minutes_per_patient, fee
+        )
+        VALUES (
+            -1,
+            '2030-01-01 12:00:00+05:30',
+            '2030-01-01 09:00:00+05:30',
+            'ONLINE', 10, 10, 1500.00
+        );
+
+        RAISE EXCEPTION
+            'FAIL: Invalid session times were accepted.';
+
+    EXCEPTION
+        WHEN check_violation THEN
+            GET STACKED DIAGNOSTICS
+                failed_constraint = CONSTRAINT_NAME;
+
+            IF failed_constraint <> 'chk_sessions_times' THEN
+                RAISE;
+            END IF;
+
+            RAISE NOTICE
+                'PASS: Invalid session times were rejected.';
+    END;
+END;
+$$;
