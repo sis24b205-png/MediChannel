@@ -120,3 +120,37 @@ LEFT JOIN public.feedback AS f
    AND f.moderation_status = 'APPROVED'
 GROUP BY d.doctor_id, d.full_name
 ORDER BY average_rating DESC NULLS LAST, d.doctor_id;
+
+-- Report 07: Today's sessions in Asia/Colombo.
+-- Includes cancelled sessions for manager visibility.
+
+SELECT
+    s.session_id,
+    d.full_name AS doctor_name,
+    s.session_type,
+    r.room_number,
+    s.starts_at,
+    s.ends_at,
+    s.delay_minutes,
+    s.status,
+    s.max_patients,
+    s.last_issued_number,
+    s.max_patients - s.last_issued_number
+        AS unissued_numbers,
+    s.now_serving_number,
+    COUNT(a.appointment_id) FILTER (
+        WHERE a.status <> 'CANCELLED'
+    ) AS non_cancelled_appointments
+FROM public.sessions AS s
+JOIN public.doctors AS d
+    ON d.doctor_id = s.doctor_id
+LEFT JOIN public.rooms AS r
+    ON r.room_id = s.room_id
+LEFT JOIN public.appointments AS a
+    ON a.session_id = s.session_id
+WHERE
+    (s.starts_at AT TIME ZONE 'Asia/Colombo')::DATE
+    =
+    (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Colombo')::DATE
+GROUP BY s.session_id, d.doctor_id, r.room_id
+ORDER BY s.starts_at, s.session_id;
