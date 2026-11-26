@@ -1,0 +1,48 @@
+Project: MediChannel
+Hospital Channelling and Appointment System
+
+1. TECHNOLOGIES
+Frontend: Next.js
+Backend: Spring Boot
+Database: PostgreSQL
+
+2. USER ROLES
+CUSTOMER - Patient
+DOCTOR - Consultant
+MANAGER - Hospital Manager
+ADMIN - System Administrator
+
+3. MAIN FEATURES
+- User registration and secure login
+- Search doctors and sessions
+- Book physical and online appointments
+- View and cancel own appointments
+- Live queue and appointment availability
+- Private doctor-patient consultation chat
+- Consultation summaries and prescriptions
+- In-app notifications
+- Manage doctors, rooms and sessions
+- Patient check-in and payment recording
+- Feedback and hospital notices
+- Dashboards and reports
+- User account management and audit logs
+
+4. SECURITY
+- Role and ownership permission checks
+- Medical records accessible only to the patient
+  and treating doctor
+- Password hashing
+- Personal and medical data encryption
+- Secure login cookies
+- Request validation
+
+5. DELIVERABLES
+- GitHub source code and README
+- Hosted frontend, backend and database
+- Report: 4,000-6,000 words
+- At least 30 test cases
+- Presentation slides
+- Backup demo recording: 8-10 minutes
+
+Note: This is an initial overview.
+The assignment brief is the full requirements reference.
