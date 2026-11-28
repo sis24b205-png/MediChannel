@@ -16,6 +16,10 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 
 import com.medichannel.backend.dto.ChangePasswordRequest;
 
+import jakarta.servlet.http.HttpServletRequest;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
+
 @RestController
 @RequestMapping("/api/auth")
 public class AuthController {
@@ -28,24 +32,36 @@ public class AuthController {
 
     @PostMapping("/register")
     public ResponseEntity<Map<String, String>> register(
-            @Valid @RequestBody RegisterRequest request) {
+        @Valid @RequestBody RegisterRequest request,
+        HttpServletRequest httpRequest)
+        throws UnknownHostException {
 
-        authService.register(request);
+    InetAddress ipAddress =
+            InetAddress.getByName(
+                    httpRequest.getRemoteAddr());
 
-        return ResponseEntity
-                .status(HttpStatus.CREATED)
-                .body(Map.of(
-                        "message",
-                        "Registration successful"));
+    authService.register(request, ipAddress);
+
+    return ResponseEntity
+            .status(HttpStatus.CREATED)
+            .body(Map.of(
+                    "message",
+                    "Registration successful"));
     }
 
     @PostMapping("/login")
     public ResponseEntity<AuthResponse> login(
-            @Valid @RequestBody LoginRequest request) {
+        @Valid @RequestBody LoginRequest request,
+        HttpServletRequest httpRequest)
+        throws UnknownHostException {
 
-        AuthResponse response = authService.login(request);
+    InetAddress ipAddress =
+            InetAddress.getByName(httpRequest.getRemoteAddr());
 
-        return ResponseEntity.ok(response);
+    AuthResponse response =
+            authService.login(request, ipAddress);
+
+    return ResponseEntity.ok(response);
 }
     @GetMapping("/me")
     public ResponseEntity<Map<String, Object>> me(
@@ -60,11 +76,16 @@ public class AuthController {
 @PostMapping("/change-password")
 public ResponseEntity<Map<String, String>> changePassword(
         @AuthenticationPrincipal Jwt jwt,
-        @Valid @RequestBody ChangePasswordRequest request) {
+        @Valid @RequestBody ChangePasswordRequest request,
+        HttpServletRequest httpRequest)
+        throws UnknownHostException {
 
     Long userId = Long.valueOf(jwt.getSubject());
 
-    authService.changePassword(userId, request);
+    InetAddress ipAddress =
+            InetAddress.getByName(httpRequest.getRemoteAddr());
+
+    authService.changePassword(userId, request, ipAddress);
 
     return ResponseEntity.ok(
             Map.of("message", "Password changed successfully"));

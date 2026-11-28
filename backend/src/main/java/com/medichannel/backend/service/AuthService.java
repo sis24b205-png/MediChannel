@@ -18,6 +18,8 @@ import java.time.OffsetDateTime;
 
 import com.medichannel.backend.dto.ChangePasswordRequest;
 
+import java.net.InetAddress;
+
 @Service
 public class AuthService {
 
@@ -27,6 +29,7 @@ public class AuthService {
     private final EncryptionService encryptionService;
     private final LookupHashService lookupHashService;
     private final JwtService jwtService;
+    private final AuditLogService auditLogService;
 
     public AuthService(
             UserRepository userRepository,
@@ -34,7 +37,8 @@ public class AuthService {
             PasswordEncoder passwordEncoder,
             EncryptionService encryptionService,
             LookupHashService lookupHashService,
-            JwtService jwtService) {
+            JwtService jwtService,
+            AuditLogService auditLogService) {
 
         this.userRepository = userRepository;
         this.patientRepository = patientRepository;
@@ -42,9 +46,12 @@ public class AuthService {
         this.encryptionService = encryptionService;
         this.lookupHashService = lookupHashService;
         this.jwtService = jwtService;
+        this.auditLogService = auditLogService;
     }
-    @Transactional
-public void register(RegisterRequest request) {
+@Transactional
+public void register(
+        RegisterRequest request,
+        InetAddress ipAddress) {
 
     String email = request.email()
             .trim().toLowerCase(Locale.ROOT);
@@ -121,34 +128,76 @@ public void register(RegisterRequest request) {
             encryptionService.encrypt(request.address()));
 
     patientRepository.save(patient);
+    // Record successful registration
+    auditLogService.record(
+        savedUser.getUserId(),
+        "REGISTER",
+        "USER",
+        savedUser.getUserId(),
+        "SUCCESS",
+        ipAddress);
 }
 
 @Transactional(noRollbackFor = ResponseStatusException.class)
-public AuthResponse login(LoginRequest request) {
+public AuthResponse login(
+        LoginRequest request,
+        InetAddress ipAddress) {
 
     String emailHash =
             lookupHashService.hashEmail(request.email());
 
     User user = userRepository.findOneByEmailHash(emailHash)
-            .orElseThrow(() -> invalidLogin());
+        .orElse(null);
+
+// Record unknown email login attempt
+if (user == null) {
+
+    auditLogService.record(
+            null,
+            "LOGIN_FAILED",
+            null,
+            null,
+            "FAILURE",
+            ipAddress);
+
+    throw invalidLogin();
+}
 
     OffsetDateTime now = OffsetDateTime.now();
 
     // Check active account
-    if (!user.isActive()) {
+if (!user.isActive()) {
+
+    auditLogService.record(
+            null,
+            "LOGIN_FAILED",
+            "USER",
+            user.getUserId(),
+            "FAILURE",
+            ipAddress);
+
+    throw invalidLogin();
+}
+
+// Check account lock
+if (user.getLockedUntil() != null) {
+
+    if (user.getLockedUntil().isAfter(now)) {
+
+        auditLogService.record(
+                null,
+                "LOGIN_FAILED",
+                "USER",
+                user.getUserId(),
+                "FAILURE",
+                ipAddress);
+
         throw invalidLogin();
     }
 
-    // Check account lock
-    if (user.getLockedUntil() != null) {
-
-        if (user.getLockedUntil().isAfter(now)) {
-            throw invalidLogin();
-        }
-
-        user.setLockedUntil(null);
-        user.setFailedLoginAttempts(0);
-    }
+    user.setLockedUntil(null);
+    user.setFailedLoginAttempts(0);
+}
 
     // Verify password
     boolean validPassword =
@@ -160,18 +209,37 @@ public AuthResponse login(LoginRequest request) {
 
     if (!validPassword) {
 
-        int attempts = user.getFailedLoginAttempts() + 1;
+    int attempts = user.getFailedLoginAttempts() + 1;
 
-        user.setFailedLoginAttempts(attempts);
+    user.setFailedLoginAttempts(attempts);
 
-        if (attempts >= 5) {
-            user.setLockedUntil(now.plusMinutes(15));
-        }
+    if (attempts >= 5) {
 
-        userRepository.save(user);
+    user.setLockedUntil(now.plusMinutes(15));
 
-        throw invalidLogin();
-    }
+    // Record automatic account locking
+    auditLogService.record(
+            null,
+            "ACCOUNT_LOCKED",
+            "USER",
+            user.getUserId(),
+            "SUCCESS",
+            ipAddress);
+}
+
+    userRepository.save(user);
+
+    // Record incorrect password login attempt
+    auditLogService.record(
+            null,
+            "LOGIN_FAILED",
+            "USER",
+            user.getUserId(),
+            "FAILURE",
+            ipAddress);
+
+    throw invalidLogin();
+}
 
     // Reset failed login attempts
     user.setFailedLoginAttempts(0);
@@ -183,6 +251,15 @@ public AuthResponse login(LoginRequest request) {
     String token = jwtService.issue(
             user.getUserId(),
             user.getRole());
+
+    // Record successful login
+    auditLogService.record(
+        user.getUserId(),
+        "LOGIN_SUCCESS",
+        "USER",
+        user.getUserId(),
+        "SUCCESS",
+        ipAddress);
 
     return new AuthResponse(
             token,
@@ -199,9 +276,9 @@ private ResponseStatusException invalidLogin() {
 }
 
 @Transactional
-public void changePassword(
-        Long userId,
-        ChangePasswordRequest request) {
+public void changePassword(Long userId,
+                           ChangePasswordRequest request,
+                           InetAddress ipAddress) {
 
     User user = userRepository.findOneByUserId(userId)
             .orElseThrow(() -> new ResponseStatusException(
@@ -260,5 +337,13 @@ public void changePassword(
     user.setLockedUntil(null);
 
     userRepository.save(user);
+    // Record successful password change
+auditLogService.record(
+        user.getUserId(),
+        "PASSWORD_CHANGED",
+        "USER",
+        user.getUserId(),
+        "SUCCESS",
+        ipAddress);
 }
 }
